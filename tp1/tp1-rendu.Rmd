@@ -1,0 +1,175 @@
+---
+title: "tp1-questions"
+output: html_document
+date: "2024-09-11"
+---
+
+# Analyse descriptive des données : QUESTIONS
+
+## Préparation des données
+
+```{r}
+load("malbouffe.RData")
+names(data)
+str(data)
+
+knitr::kable(
+  data[1:3, 2:7], caption = 'Variables qualitatives (colonnes 2 à 7) de malbouffe: 3 premières lignes'
+)
+knitr::kable(
+  data[1:3, c(1,8:11)], caption = 'Variables quantitatives (colonnes 8 a 11) de malbouffe: 3 premières lignes'
+)
+```
+
+```{r}
+#-------------------------
+#Transformation en factor:
+#-------------------------
+for(j in 2:7){
+  data[,j]<-as.factor(data[,j])
+}
+```
+
+```{r}
+#-------------------------
+#Transformation en numeric:
+#-------------------------
+for(j in c(1,8:11)){
+  data[,j]<-as.numeric(as.character(data[,j]))
+}
+```
+
+```{r}
+#-------------------------
+#Création de variables quali à partir de quanti:
+#-------------------------
+data$corpulence<- cut(data$imc,
+                      c(0, 16.5, 18.5, 25, 30, 35, 40, 100),
+                      include.lowest = TRUE,
+                      labels = c("denutrition", "maigreur", "normale", "surpoids",
+                                 "obesite moderee", "obesite sever", "obesite morbide"))
+table(data$corpulence)
+data$obesite<- cut(data$imc, c(16.5, 25, 100), include.lowest = TRUE,
+                   labels = c("maigreur ou normale", "surpoids ou obesite"))
+table(data$obesite)
+```
+
+```{r}
+#-------------------------
+#Ré-ordonner les colonnes pour avoir les quanti d'un coté et les quali de l'autre:
+#-------------------------
+data<-data[,c(2:7,12:13,1,8:11)]
+quali<-1:8
+quanti<-9:13
+summary(data)
+```
+
+
+## Existe-t-il un lien entre le score d’adhérence et les variables socio-démographiques ? Si oui, dans quel sens ?
+
+- malbouffe = quanti
+
+```{r}
+socio_demo_quali <- c("sexe", "filiere", "domicile", "revenus", "situation", "etudes")
+var_socio_quali<-data[, socio_demo_quali]
+
+socio_demo_quanti <- c("age")
+var_socio_quanti<-data[, socio_demo_quanti]
+
+score<-c("malbouffe")
+var_score<-data[,score]
+```
+
+```{r}
+# QUANTI VS QUANTI
+
+cor(data$malbouffe,data$age)
+plot(malbouffe~age,data=data,pch = 20,col="red")
+```
+
+
+
+```{r}
+# QUANTI VS QUALI
+
+boxplot(data$malbouffe~data$sexe, col="blue")
+boxplot(data$malbouffe~data$filiere, col="blue")
+boxplot(data$malbouffe~data$domicile, col="blue")
+boxplot(data$malbouffe~data$revenus, col="blue")
+boxplot(data$malbouffe~data$situation, col="blue")
+boxplot(data$malbouffe~data$etudes, col="blue")
+```
+
+## le temps moyen hebdomadaire d’activité. Si oui, dans quel sens ? (toutes les variables sauf l’IMC)
+
+```{r}
+cor(data$malbouffe,data$exercice)
+plot(malbouffe~exercice,data=data,pch = 20,col="red")
+```
+
+## Existe-t’il une association entre l’IMC et les variables socio-démographiques ? Si oui, dans quel sens ?
+
+#### IMC = QUANTI
+
+```{r}
+# QUANTI VS QUANTI
+
+cor(data$imc,data$age)
+plot(imc~age,data=data,pch = 20,col="red")
+```
+
+```{r}
+# QUANTI VS QUALI
+
+boxplot(data$imc~data$sexe, col="blue")
+boxplot(data$imc~data$filiere, col="blue")
+boxplot(data$imc~data$domicile, col="blue")
+boxplot(data$imc~data$revenus, col="blue")
+boxplot(data$imc~data$situation, col="blue")
+boxplot(data$imc~data$etudes, col="blue")
+```
+
+#### IMC = QUALI
+
+```{r}
+qualis_var <- c("sexe", "filiere", "domicile", "revenus", "situation", "etudes")
+qualis<-data[, qualis_var]
+### mettre imc en quali
+imc_var<-c("imc")
+imc_score<-data[,imc]
+
+par(mfrow=c(2,4))
+for(j in qualis){
+    epiDisplay::tabpct(data[,j],data[,i],decimal = 0, percent = "col",
+                         graph = TRUE, xlab=names(data)[j],
+                         ylab =names(data)[i], main="")
+}
+```
+
+
+
+## les variables comportementales ? Si oui, dans quel sens ?
+
+#### IMC = QUANTI
+
+```{r}
+cor(data$imc,data$fruits)
+plot(imc~fruits,data=data,pch = 20,col="red")
+```
+
+```{r}
+cor(data$imc,data$malbouffe)
+plot(imc~malbouffe,data=data,pch = 20,col="red")
+```
+
+```{r}
+cor(data$imc,data$exercice)
+plot(imc~exercice,data=data,pch = 20,col="red")
+```
+
+#### IMC = QUALI
+
+
+
+
+
