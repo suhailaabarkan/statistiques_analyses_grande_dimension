@@ -1,0 +1,386 @@
+---
+title: "Script"
+output: html_document
+date: "2024-09-21"
+---
+
+# Données
+
+Ici on va se concentrer sur les données de malbouffe car il y a dedans des variables qualitatives et quantitatives.
+
+```{r}
+# Charger les données
+load("malbouffe.RData")
+data[,2:7]<-apply(data[,2:7],2,as.factor) # variables qualitatives
+data<-DataExplorer::update_columns(data, c(1,8:11), as.numeric)
+summary(data)
+```
+
+```{r}
+library(MASS)
+library(SignifReg)
+library(leaps)
+library(gtools)
+```
+
+
+# Statistiques descriptives
+
+# Modèles de régression
+
+## BACKWARD avec AIC
+
+```{r}
+model_complet <- lm(formula = malbouffe ~ ., data = data)
+step.b.AIC <- step(model_complet, direction = "backward", data = data)
+summary(step.b.AIC)
+```
+
+## BACKWARD avec p-value
+
+```{r}
+fullmodel <- lm(malbouffe ~ ., data = data)
+step.b.pvalue <- SignifReg(fit = fullmodel, scope = list(lower = ~1, upper = fullmodel), alpha = 0.05, direction = "backward", criterion = "p-value", adjust.method = "none", trace = FALSE)
+summary(step.b.pvalue)
+```
+
+## FORWARD avec AIC
+
+```{r}
+model_vide <- lm(formula = malbouffe ~ 1, data = data)
+step.f.AIC <- stepAIC(model_vide, scope = list(upper = model_complet, lower = model_vide), direction = "forward", data = data)
+summary(step.f.AIC)
+```
+
+## FORWARD avec p-value
+
+```{r}
+nullmodel <- lm(malbouffe ~ 1, data = data)
+step.f.pvalue <- SignifReg(fit = nullmodel, scope = list(upper = fullmodel, lower = nullmodel), alpha = 0.05, direction = "forward", criterion = "p-value", adjust.method = "none", trace = FALSE)
+summary(step.f.pvalue)
+```
+
+## ALL SUBSETS avec Cross Validation (CV)
+
+```{r}
+#Convertir les variables qualitatives en numériques : 
+#utiliser la fonction model.matrix() pour transformer automatiquement les facteurs en variables indicatrices (dummy variables)
+
+# Nombre d'observations
+n <- dim(data)[1]
+
+# Séparer les variables explicatives (x) et la variable réponse (y)
+x <- data[, -which(colnames(data) == "malbouffe")]
+y <- as.matrix(data[,"malbouffe"], nrow=n)
+colnames(y) <- colnames(data)[colnames(data) == "malbouffe"]
+p <- dim(x)[2]
+
+# Fonction pour concaténer des chaînes
+"%+%" <- function(x, y) paste(x, y, sep="")
+
+# Générer tous les sous-ensembles de variables
+models <- cbind(combinations(p, 1, 1:p), array(0, dim = c(p, p-1)))
+for (i in 2:p) {
+  nc <- dim(combinations(p, i, 1:p))[1]
+  models <- rbind(models, cbind(combinations(p, i, 1:p), array(0, dim = c(nc, p-i))))
+}
+
+# Nombre de folds pour la cross-validation
+folds <- 10
+all.folds <- split(sample(1:n), rep(1:folds, length = n))
+error <- matrix(NA, ncol = 1, nrow = folds)
+errorCV <- matrix(NA, ncol = 1, nrow = dim(models)[1])
+
+# Boucle sur tous les sous-ensembles possibles de variables
+for (i in 1:dim(models)[1]){
+  variables <- models[i, which(models[i,] > 0)]
+  X <- x[, variables]  # Sélection des colonnes correspondantes
+  
+  # Gestion du cas où il n'y a qu'une seule variable
+  if (length(variables) == 1){
+    X <- as.data.frame(X)
+    colnames(X) <- colnames(x)[variables]
+  }
+  
+  # Utilisation de model.matrix pour transformer les variables qualitatives en dummies
+  X_full <- model.matrix(~ ., data = as.data.frame(X))[,-1]  # Supprimer l'intercept
+  
+  # Transformer X_full en matrice si nécessaire (pour éviter les erreurs)
+  if (is.null(dim(X_full))) {
+    X_full <- matrix(X_full, ncol = 1)
+  }
+  
+  model_i <- as.formula(paste("malbouffe ~", paste(colnames(X), collapse = "+")))
+  
+  for (j in seq(folds)){
+    #**********
+    # Estimation
+    #**********
+    omit <- all.folds[[j]]
+    
+    # Apprentissage du modèle sur les données d'entraînement (sans les observations omises)
+    beta <- lm(model_i, data = data[-omit,])$coefficients
+    
+    #**********
+    # Test
+    #**********
+    # Appliquer les mêmes transformations sur les données de test (omises)
+    X_test <- as.matrix(X_full[omit,])  # Transformation des variables qualitatives en matrice
+    if (is.null(dim(X_test))) {
+      X_test <- matrix(X_test, ncol = 1)  # Assurer que X_test reste une matrice
+    }
+    
+    # Calcul des prédictions
+    Y_hat <- beta[1] + X_test %*% beta[-1]
+    
+    # Calcul de l'erreur
+    error[j] <- t(Y_hat - y[omit,]) %*% (Y_hat - y[omit,]) / length(omit)
+  }
+  
+  # Calcul de l'erreur moyenne sur tous les folds
+  errorCV[i] <- mean(error)
+}
+
+# Afficher le modèle qui minimise l'erreur de validation croisée
+best_model <- models[which.min(errorCV), ]
+colnames(x)[best_model]
+```
+
+## ALL SUBSETS avec AIC
+
+```{r}
+# Packages nécessaires
+library(combinat)  # Pour générer les combinaisons
+n <- dim(data)[1] # Nombre d'observations
+x <- data[, -which(colnames(data) == "malbouffe")]  # Variables explicatives
+y <- data[,"malbouffe"]  # Variable dépendante
+p <- dim(x)[2]  # Nombre de variables explicatives
+
+# Génération des combinaisons de modèles
+models <- list()
+
+for (i in 1:p) {
+  models[[i]] <- combinations(p, i, 1:p)  # Tous les sous-ensembles de taille i
+}
+
+# Fonction pour calculer l'AIC pour chaque sous-ensemble de variables
+get_AIC <- function(variables, data) {
+  X <- data[, variables]
+  
+  if (length(variables) <= 1) {
+    X <- as.matrix(X)
+    colnames(X) <- colnames(data)[variables]
+  }
+  
+  # Construction du modèle et calcul de l'AIC
+  model_formula <- as.formula(paste("malbouffe ~", paste(colnames(X), collapse = "+")))
+  fit <- lm(model_formula, data = data)
+  return(AIC(fit))
+}
+
+# Liste pour stocker les AIC et les modèles
+results <- data.frame(AIC = numeric(), Model = character())
+
+# Boucle sur toutes les combinaisons possibles de variables
+for (i in 1:p) {
+  for (j in 1:nrow(models[[i]])) {
+    variables <- models[[i]][j, ]
+    
+    # Calcul de l'AIC pour ce sous-ensemble de variables
+    current_AIC <- get_AIC(variables, data)
+    
+    # Sauvegarde du résultat
+    results <- rbind(results, data.frame(AIC = current_AIC, 
+                                         Model = paste(colnames(x)[variables], collapse = "+")))
+  }
+}
+
+# Trouver le modèle avec l'AIC minimum
+best_model <- results[which.min(results$AIC), ]
+print(best_model)
+```
+
+
+## LASSO (alpha=1) et RIDGE (alpha=0) --> Pour RIDGE C'est la même chose qu'avec LASSO, il suffit de changer alpha=1 à alpha=0
+
+On sait que la variable malbouffe a été créée en fonction de fruits donc c'est pas utile de garder la variable puisqu'on sait déjà que ça a un impact. Il vaut mieux laisser la place aux autres variables pour qu'on puisse voir comment elles impactent mallbouffe
+En gros quand on affiche le LASSO et qu'on voit que qu'une variable est très éloignée des autres dès le début, il vaut mieux la supprimer parce que on sait déjà qu'elle aura un impact significatif.
+
+### LASSO
+
+```{r}
+
+# Créer une matrice de variables explicatives en transformant automatiquement les facteurs en variables indicatrices
+# model.matrix génère une matrice de variables indicatrices pour les colonnes qualitatives
+X <- model.matrix(~ . - 1, data = data[, c(1:7, 10:11)]) # Le -1 permet de ne pas inclure l'intercept car il sera inclus dans le LASSO
+
+# Extraire la variable dépendante
+Y <- data[,9]
+
+library(glmnet)
+
+# Ajustement du modèle LASSO
+fit.lasso <- glmnet(x = X, y = Y, family = 'gaussian', alpha = 1, nlambda = 100, 
+                    standardize = TRUE, intercept = TRUE)
+
+# Visualisation des coefficients
+plot(fit.lasso, label = TRUE)
+
+# Obtenir les noms des variables indicatrices créées par model.matrix
+variable.names <- colnames(X)
+
+# Ajouter la légende avec les noms des variables
+legend("topleft", legend = variable.names, col = 1:ncol(X), lty = 1, cex = 0.8)
+```
+
+```{r}
+#X <- as.matrix(X) # Conversion de X en matrice, car glmnet nécessite une matrice pour les régressions pénalisées
+
+# Ajustement du modèle LASSO avec validation croisée
+# cv.glmnet applique une validation croisée à 10 plis (nfold = 10) pour choisir la meilleure valeur de lambda
+fit.cv.lasso <- cv.glmnet(x = X, y = Y, family = 'gaussian', alpha = 1, nlambda = 100, 
+                          nfold = 10, standardize = TRUE, intercept = TRUE)
+
+# Affichage des erreurs estimées par validation croisée en fonction des valeurs de lambda
+# Cela permet de visualiser la courbe de l'erreur de validation croisée pour déterminer la valeur optimale de lambda
+plot(fit.cv.lasso)
+
+# Résumé du modèle LASSO avec validation croisée
+# Fournit des détails sur les performances et les coefficients sélectionnés pour le lambda optimal
+summary(fit.cv.lasso)
+```
+
+```{r}
+# Récupération de la valeur optimale de lambda minimisant l'erreur de validation croisée
+lamb.opt.cvm <- fit.cv.lasso$lambda.min 
+
+# Extraction des coefficients du modèle LASSO correspondant à lambda optimal
+coef.fit <- predict(fit.cv.lasso, s = lamb.opt.cvm, type = "coefficients")
+
+# Récupération de la valeur de lambda pour la règle "1-SE" (un compromis entre biais et variance)
+lamb.opt.1se <- fit.cv.lasso$lambda.1se
+
+# Extraction des coefficients du modèle LASSO correspondant à lambda pour la règle 1-SE
+coef.fit <- predict(fit.cv.lasso, s = lamb.opt.1se, type = "coefficients")
+
+# Affichage de la courbe des erreurs de validation croisée par rapport à lambda
+plot(fit.cv.lasso)
+
+# Ajout d'une ligne bleue indiquant la valeur de lambda qui minimise l'erreur de validation croisée
+abline(v = log(lamb.opt.cvm), col = 'blue', lty = 'solid', lwd = 2)
+
+# Ajout d'une ligne verte indiquant la valeur de lambda selon la règle 1-SE
+abline(v = log(lamb.opt.1se), col = 'green', lty = 'solid', lwd = 2)
+```
+
+```{r}
+# Validation croisée pour sélectionner la meilleure valeur de lambda
+fit.cv.lasso <- cv.glmnet(x = X, y = Y, family = 'gaussian', alpha = 1, nlambda = 100, 
+                          standardize = TRUE, intercept = TRUE)
+
+# Utiliser la valeur de lambda qui minimise l'erreur de validation croisée
+lamb.opt.cvm <- fit.cv.lasso$lambda.min
+
+# Obtenir les coefficients pour lambda.min
+coef.min <- predict(fit.cv.lasso, s = lamb.opt.cvm, type = "coefficients")
+
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.min <- rownames(coef.min)[which(coef.min != 0)]
+selected.variables.min
+```
+
+```{r}
+# Utiliser la valeur de lambda selon la règle "1-SE"
+lamb.opt.1se <- fit.cv.lasso$lambda.1se 
+
+# Obtenir les coefficients pour lambda.1se
+coef.1se <- predict(fit.cv.lasso, s = lamb.opt.1se, type = "coefficients")
+
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.1se <- rownames(coef.1se)[which(coef.1se != 0)]
+selected.variables.1se
+```
+
+
+### Quels variables ont été sélectionnées par LASSO : 
+
+Pour voir quelles variables ont été sélectionnées par votre modèle LASSO, vous pouvez examiner les coefficients non nuls après avoir ajusté le modèle avec la valeur de **lambda** choisie (soit `lambda.min` pour la valeur optimale, soit `lambda.1se` pour un modèle plus simple).
+
+Voici les étapes et le code pour extraire les variables sélectionnées :
+
+1. **Utilisation de la valeur optimale de lambda** :
+   - `lambda.min` : La valeur de lambda qui minimise l'erreur de validation croisée.
+   - `lambda.1se` : Une valeur de lambda légèrement plus élevée qui privilégie la simplicité du modèle (sélectionne moins de variables).
+
+2. **Extraire les coefficients non nuls** :
+   Utilisez la fonction `predict` avec l'option `type = "coefficients"` pour obtenir les coefficients associés à la valeur de **lambda** optimale.
+
+
+#### Explication :
+- `which(coef.min != 0)` renvoie les indices des coefficients qui ne sont pas nuls, c'est-à-dire les variables sélectionnées par LASSO.
+- Ensuite, `rownames(coef.min)` vous donne les noms des variables correspondantes à ces coefficients.
+
+Cela vous permet de voir clairement quelles variables explicatives ont été retenues par le modèle LASSO et contribuent réellement à la prédiction de la variable dépendante (**malbouffe**).
+
+## RIDGE
+```{r}
+library(glmnet) # Chargement du package glmnet pour les régressions pénalisées (LASSO et RIDGE)
+
+# Ajustement du modèle LASSO
+# alpha = 0 spécifie que l'on utilise la pénalisation RIDGE
+# standardize = TRUE normalise les variables explicatives avant l'ajustement
+# intercept = TRUE inclut une constante (intercept) dans le modèle
+fit.ridge <- glmnet(x = X, y = Y, family = 'gaussian', alpha = 0, nlambda = 100, 
+                    standardize = TRUE, intercept = TRUE)
+
+# Visualisation des coefficients beta en fonction de la valeur de lambda
+# Chaque ligne correspond à un coefficient, et les variables sont sélectionnées progressivement avec la diminution de lambda
+plot(fit.ridge, label = TRUE)
+
+# Résumé du modèle LASSO : permet d'obtenir des informations sur l'ajustement
+summary(fit.ridge)
+```
+
+```{r}
+X<-as.matrix(X)
+fit.cv.ridge<-cv.glmnet(x=X,y=Y,family='gaussian',alpha=0,nblambda=100,nfold=10,standardize = TRUE,intercept=TRUE)
+#estimation de beta et la sélection de variables
+plot(fit.cv.ridge) # on plot l'estimation de l'erreur par validation croisée
+summary(fit.cv.ridge)
+```
+
+```{r}
+lamb.opt.cvm <- fit.cv.ridge$lambda.min
+coef.fit <- predict(fit.cv.ridge, s=lamb.opt.cvm, type = "coefficient")
+lamb.opt.1se <- fit.cv.ridge$lambda.1se
+coef.fit <- predict(fit.cv.ridge, s=lamb.opt.1se, type = "coefficient")
+plot(fit.cv.ridge)
+abline(v = log(lamb.opt.cvm),col='blue',lty='solid',lwd=2)
+abline(v = log(lamb.opt.1se),col='green',lty='solid',lwd=2)
+```
+
+```{r}
+# Utiliser la valeur de lambda qui minimise l'erreur de validation croisée
+lamb.opt.cvm <- fit.cv.ridge$lambda.min 
+
+# Obtenir les coefficients pour lambda.min
+coef.min <- predict(fit.cv.ridge, s = lamb.opt.cvm, type = "coefficients")
+
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.min <- rownames(coef.min)[which(coef.min != 0)]
+selected.variables.min
+```
+
+#### Si vous voulez utiliser la règle 1-SE pour une sélection plus conservatrice :
+
+```{r}
+# Utiliser la valeur de lambda selon la règle "1-SE"
+lamb.opt.1se <- fit.cv.ridge$lambda.1se 
+
+# Obtenir les coefficients pour lambda.1se
+coef.1se <- predict(fit.cv.ridge, s = lamb.opt.1se, type = "coefficients")
+
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.1se <- rownames(coef.1se)[which(coef.1se != 0)]
+selected.variables.1se
+```
