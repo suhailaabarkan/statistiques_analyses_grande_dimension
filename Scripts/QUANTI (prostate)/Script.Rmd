@@ -1,0 +1,289 @@
+---
+title: "Script"
+output: html_document
+date: "2024-09-28"
+---
+
+# Données
+
+Ici on va se concentrer sur les données de prostate car il y a dedans que des variables quantitatives.
+
+```{r}
+# Charger les données
+load("prostate.RData")
+```
+
+```{r}
+library(MASS)
+library(SignifReg)
+library(leaps)
+library(gtools)
+```
+
+
+# Modèles de régression
+
+## BACKWARD avec AIC
+
+```{r}
+model_complet <- lm(formula = lpsa ~ ., data = prostate)
+step.b.AIC <- step(model_complet, direction = "backward", data = prostate)
+summary(step.b.AIC)
+```
+
+## BACKWARD avec p-value
+
+```{r}
+fullmodel <- lm(lpsa ~ ., data = prostate)
+step.b.pvalue <- SignifReg(fit = fullmodel, scope = list(lower = ~1, upper = fullmodel), alpha = 0.05, direction = "backward", criterion = "p-value", adjust.method = "none", trace = FALSE)
+summary(step.b.pvalue)
+```
+
+## FORWARD avec AIC
+
+```{r}
+model_vide <- lm(formula = lpsa ~ 1, data = prostate)
+step.f.AIC <- stepAIC(model_vide, scope = list(upper = model_complet, lower = model_vide), direction = "forward", data = prostate)
+summary(step.f.AIC)
+```
+
+## FORWARD avec p-value
+
+```{r}
+nullmodel <- lm(lpsa ~ 1, data = prostate)
+step.f.pvalue <- SignifReg(fit = nullmodel, scope = list(upper = fullmodel, lower = nullmodel), alpha = 0.05, direction = "forward", criterion = "p-value", adjust.method = "none", trace = FALSE)
+summary(step.f.pvalue)
+```
+
+## ALL SUBSETS avec Cross Validation (CV)
+
+```{r}
+# Packages nécessaires
+library(combinat)  # Pour générer les combinaisons
+n <- dim(prostate)[1]
+# Création d'une matrice contenant toutes les variables explicatives sauf "lpsa" (variable réponse) et la dernière colonne
+x <- as.matrix(prostate[,-c(9,10)], nrow=n)
+# Création de la matrice contenant uniquement la variable réponse "lpsa"
+y <- as.matrix(prostate[,9], nrow=n)
+colnames(y) <- colnames(prostate)[9]  # Nom de la colonne de y défini comme le nom de la colonne dans le dataset
+# Détermination du nombre de variables explicatives 
+p <- dim(x)[2]
+```
+
+
+```{r}
+require(gtools)
+# Définition d'un opérateur personnalisé "%+%" pour concaténer des chaînes de caractères avec un séparateur vide
+"%+%" <- function(x, y) paste(x, y, sep="")
+models <- cbind(combinations(p, 1, 1:p), array(0, dim = c(p, p-1)))  # Génère d'abord les combinaisons avec 1 variable
+for (i in 2:p) {
+  # Génère les combinaisons de variables allant de 2 à p variables
+  nc <- dim(combinations(p, i, 1:p))[1]  # Nombre de combinaisons possibles pour i variables
+  models <- rbind(models, cbind(combinations(p, i, 1:p), array(0, dim = c(nc, p-i))))  # Ajoute les combinaisons au tableau
+}
+# Nombre de sous-ensembles (folds) pour la validation croisée
+folds <- 10
+
+# Divise les données en "folds" parties pour la validation croisée
+all.folds <- split(sample(1:n), rep(1:folds, length = n)) #on divise les données de façon aléatoire
+
+# Initialisation d'une matrice pour stocker les erreurs pour chaque fold
+error <- matrix(NA, ncol=1, nrow=folds)
+
+# Initialisation d'une matrice pour stocker les erreurs moyennes pour chaque modèle
+errorCV <- matrix(NA, ncol=1, nrow=dim(models)[1])
+
+#pour chaque modèle on devra faire les calculs
+
+# Boucle sur chaque combinaison de variables dans "models"
+for (i in 1:dim(models)[1]) {
+  # Sélection des variables pour le modèle courant
+  variables <- models[i, which(models[i,] > 0)]
+  X <- x[,variables]
+  
+  # Si le modèle n'a qu'une seule variable, s'assurer que X est bien une matrice et lui attribuer un nom de colonne
+  if (length(variables) <= 1) {
+    X <- as.matrix(X)
+    colnames(X) <- colnames(x)[variables]
+  }
+  
+  # Création de la formule du modèle linéaire à partir des variables sélectionnées
+  model_i <- as.formula(colnames(y) %+% "~" %+% paste(colnames(X), collapse= "+"))
+  
+  # Validation croisée sur les folds
+  for (j in seq(folds)) {
+    #**********
+    # Estimation
+    #**********
+    omit <- all.folds[[j]]  # Indices des observations à omettre pour le fold courant (ensemble de test)
+    # contient la partie jaune dans le diapo
+    
+    #premier bloc utilisé pour estimer la performance du modèle
+    
+    # Estimation des coefficients du modèle sur l'ensemble d'entraînement (toutes les données sauf celles omises)
+    beta <- lm(model_i, data=prostate[-omit,])$coefficients #ce sont des coefficients estimés donc ce sont les beta_hat
+    
+    #**********
+    # Test
+    #**********
+    # contient la partie bleue dans le diapo
+    # Prédiction sur l'ensemble de test (les observations omises)
+    Y_hat <- beta[1] + as.matrix(X[omit,], ncol=length(variables)) %*% beta[-1]
+    # on calcule le coefficient estimé de Y avec les coefficients qu'on a estimé précedemment et on calcule l'erreur entre la prédiction et la valeur réelle
+    
+    # Calcul de l'erreur quadratique moyenne pour ce fold
+    error[j] <- t(Y_hat - y[omit,]) %*% (Y_hat - y[omit,]) / length(omit) #formule en rouge au tableau pour calculer l'erreur : distance au carré avec un produit de la transposée entre les vecteurs Yhat et les données observées dans omit
+  }
+  
+  # Calcul de l'erreur moyenne de validation croisée pour ce modèle
+  errorCV[i] <- mean(error)
+}
+
+# Affichage des noms des variables pour le modèle avec la plus petite erreur de validation croisée
+colnames(x)[models[which.min(errorCV),]]
+```
+
+
+## ALL SUBSETS avec AIC
+
+```{r}
+# Génération des combinaisons de modèles
+models <- list()
+
+for (i in 1:p) {
+  models[[i]] <- combinations(p, i, 1:p)  # Tous les sous-ensembles de taille i
+}
+
+# Fonction pour calculer l'AIC pour chaque sous-ensemble de variables
+get_AIC <- function(variables, data) {
+  X <- data[, variables]
+  
+  if (length(variables) <= 1) {
+    X <- as.matrix(X)
+    colnames(X) <- colnames(data)[variables]
+  }
+  
+  # Construction du modèle et calcul de l'AIC
+  model_formula <- as.formula(paste("lpsa ~", paste(colnames(X), collapse = "+")))
+  fit <- lm(model_formula, data = prostate)
+  return(AIC(fit))
+}
+
+# Liste pour stocker les AIC et les modèles
+results <- data.frame(AIC = numeric(), Model = character())
+
+# Boucle sur toutes les combinaisons possibles de variables
+for (i in 1:p) {
+  for (j in 1:nrow(models[[i]])) {
+    variables <- models[[i]][j, ]
+    
+    # Calcul de l'AIC pour ce sous-ensemble de variables
+    current_AIC <- get_AIC(variables, prostate)
+    
+    # Sauvegarde du résultat
+    results <- rbind(results, data.frame(AIC = current_AIC, 
+                                         Model = paste(colnames(x)[variables], collapse = "+")))
+  }
+}
+
+# Trouver le modèle avec l'AIC minimum
+best_model <- results[which.min(results$AIC), ]
+print(best_model)
+```
+
+
+# LASSO (alpha=1) et RIDGE (alpha=0) --> Pour RIDGE C'est la même chose qu'avec LASSO, il suffit de changer alpha=1 à alpha=0
+
+```{r}
+n<-nrow(prostate)
+p<-8
+X <- as.matrix(prostate[,1:8])
+Y <- prostate[,9]
+```
+
+
+## LASSO
+```{r}
+library(lme4)
+library(glmnet)
+fit.lasso<-glmnet(x=X,y=Y,family='gaussian',alpha=1,nblambda=100,standardize = TRUE,intercept=TRUE)
+#estimation de beta et la sélection de variables
+variable.names <- colnames(X)
+
+# Tracer les coefficients avec la fonction plot
+plot(fit.lasso, label = TRUE)
+
+# Ajouter les noms des variables à la place des numéros
+legend("topleft", legend = variable.names, col = 1:ncol(X), lty = 1, cex = 0.8)
+```
+
+```{r}
+fit.cv.lasso<-cv.glmnet(x=X,y=Y,family='gaussian',alpha=1,nblambda=100,nfold=10,standardize = TRUE,intercept=TRUE)
+#estimation de beta et la sélection de variables
+plot(fit.cv.lasso) # on plot l'estimation de l'erreur par validation croisée
+summary(fit.cv.lasso)
+```
+
+```{r}
+lamb.opt.cvm <- fit.cv.lasso$lambda.min
+coef.fit <- predict(fit.cv.lasso, s=lamb.opt.cvm, type = "coefficient")
+lamb.opt.1se <- fit.cv.lasso$lambda.1se
+coef.fit <- predict(fit.cv.lasso, s=lamb.opt.1se, type = "coefficient")
+plot(fit.cv.lasso)
+abline(v = log(lamb.opt.cvm),col='blue',lty='solid',lwd=2)
+abline(v = log(lamb.opt.1se),col='green',lty='solid',lwd=2)
+```
+
+```{r}
+coef.min <- predict(fit.cv.lasso, s = lamb.opt.cvm, type = "coefficients")
+selected.variables.min <- rownames(coef.min)[which(coef.min != 0)]
+selected.variables.min
+```
+
+```{r}
+coef.1se <- predict(fit.cv.lasso, s = lamb.opt.1se, type = "coefficients")
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.1se <- rownames(coef.1se)[which(coef.1se != 0)]
+selected.variables.1se
+```
+
+### RIDGE
+```{r}
+library(glmnet)
+fit.lasso<-glmnet(x=X,y=Y,family='gaussian',alpha=0,nblambda=100,standardize = TRUE,intercept=TRUE)
+#estimation de beta et la sélection de variables
+plot(fit.lasso)
+legend("topleft", legend = variable.names, col = 1:ncol(X), lty = 1, cex = 0.8)
+summary(fit.lasso)
+```
+
+```{r}
+fit.cv.lasso<-cv.glmnet(x=X,y=Y,family='gaussian',alpha=0,nblambda=100,nfold=10,standardize = TRUE,intercept=TRUE)
+#estimation de beta et la sélection de variables
+plot(fit.cv.lasso) # on plot l'estimation de l'erreur par validation croisée
+summary(fit.cv.lasso)
+```
+
+```{r}
+lamb.opt.cvm <- fit.cv.lasso$lambda.min
+coef.fit <- predict(fit.cv.lasso, s=lamb.opt.cvm, type = "coefficient")
+lamb.opt.1se <- fit.cv.lasso$lambda.1se
+coef.fit <- predict(fit.cv.lasso, s=lamb.opt.1se, type = "coefficient")
+plot(fit.cv.lasso)
+abline(v = log(lamb.opt.cvm),col='blue',lty='solid',lwd=2)
+abline(v = log(lamb.opt.1se),col='green',lty='solid',lwd=2)
+```
+
+```{r}
+coef.min <- predict(fit.cv.lasso, s = lamb.opt.cvm, type = "coefficients")
+selected.variables.min <- rownames(coef.min)[which(coef.min != 0)]
+selected.variables.min
+```
+
+```{r}
+coef.1se <- predict(fit.cv.lasso, s = lamb.opt.1se, type = "coefficients")
+# Afficher les variables sélectionnées (celles avec des coefficients non nuls)
+selected.variables.1se <- rownames(coef.1se)[which(coef.1se != 0)]
+selected.variables.1se
+```
+
