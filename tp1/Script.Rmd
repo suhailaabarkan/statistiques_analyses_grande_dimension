@@ -26,9 +26,267 @@ library(gtools)
 
 # Statistiques descriptives
 
+```{r}
+DataExplorer::plot_intro(data)
+
+knitr::kable(
+  data[1:3, 2:7], caption = 'Variables qualitatives (colonnes 2 à 7) de malbouffe: 3 premières lignes'
+)
+knitr::kable(
+  data[1:3, c(1,8:11)], caption = 'Variables quantitatives (colonnes 8 a 11) de malbouffe: 3 premières lignes'
+)
+```
+
+## Transformation en factor:
+
+```{r}
+for(j in 2:7){
+  data[,j]<-as.factor(data[,j])
+}
+```
+
+## Transformation en numeric:
+
+```{r}
+# Pareil pour s'assurer que les quanti sont déclarées quanti. 
+# Probablement as.character() innecessaire ici. Parfois cela permet d'éviter des problèmes.
+for(j in c(1,8:11)){
+  data[,j]<-as.numeric(as.character(data[,j]))
+}
+```
+
+### Création de variables quali à partir de quanti:
+
+```{r}
+data$corpulence<- cut(data$imc,
+                      c(0, 16.5, 18.5, 25, 30, 35, 40, 100),
+                      include.lowest = TRUE,
+                      labels = c("denutrition", "maigreur", "normale", "surpoids",
+                                 "obesite moderee", "obesite sever", "obesite morbide"))
+table(data$corpulence)
+data$obesite<- cut(data$imc, c(16.5, 25, 100), include.lowest = TRUE,
+                   labels = c("maigreur ou normale", "surpoids ou obesite"))
+table(data$obesite)
+
+# Valeurs manquantes
+DataExplorer::plot_missing(data)
+
+```
+
+## Ré-ordonner les colonnes pour avoir les quanti d'un coté et les quali de l'autre:
+
+```{r}
+data<-data[,c(2:7,12:13,1,8:11)]
+quali<-1:8
+quanti<-9:13
+summary(data)
+```
+
+## Univariable
+
+```{r}
+library(Hmisc)
+options(digits=1)
+Hmisc::describe(data)
+```
+
+### Quanti
+
+```{r}
+#Histogramme, d'abord 1 à 1 :
+hist(data[,9],col="blue", xlab = names(data)[9],main = "")
+#ou
+#hist(data$age,col="blue", xlab = "Age",main = "")
+#Ou toutes les quanti d'un seul coup avec une boucle :
+#partage de la zone de graphique en 1 ligne et 5 colonnes
+par(mfrow=c(1,5))
+#boucle qui fait courrir l'indice j dans quanti, soit l'objet qui contient les colonnes des quanti
+for (j in quanti) {
+  hist(data[,j],col="blue", xlab = names(data)[j],main = "")
+}
+#ou avec le package dataExplorer
+DataExplorer::plot_histogram(data)
+
+```
+
+### Quali
+
+```{r}
+#pareil pour les quali avec la fonction barplot (des effectifs donc on fait table)
+par(mfrow=c(2,4))
+for (j in quali) {
+  barplot(table(data[,j]),col="red", main = names(data)[j])
+}
+#ou avec DataExplorer
+DataExplorer::plot_bar(data)
+```
+
+## Bivariable
+
+## QUALI VS QUALI
+```{r}
+#Pour croiser toutes les quali d'un coup, on utilise 2 boucles imbriquées
+#Pour ne pas refaire 2 fois les mêmes (d'abord sexe x revenus, puis revenus x sexe, par ex.)
+#on rajoute une condition avec if: on fera ainsi le graphique uniquement si l'indice du 1er est supérieur au 2ème 
+par(mfrow=c(2,4))
+for(j in quali){
+  for(i in quali){
+    if(i>j){
+      epiDisplay::tabpct(data[,j],data[,i],decimal = 0, percent = "col",
+                         graph = TRUE, xlab=names(data)[j],
+                         ylab =names(data)[i], main="")
+    }}}
+
+
+#Obesite VS les autres QUALI
+#la fonction summary de Hmisc permet de résumer obesite en fonction du sexe à partir de la fonction indiquée dans fun (ici table) 
+#obesite a des valeurs manquantes, il faut les exclure
+#summary(obesite~sexe,data=data[!is.na(data$obesite),],fun=table)
+```
+
+### Test Khi2
+```{r}
+#Variable par variable
+#vérification des conditions d'application :
+chisq.test(data$obesite,data$sexe)$expected
+chisq.test(data$obesite,data$sexe,correct = FALSE) #sans correction de Yates puisque grands échantillons
+
+#Toutes les variables VS obésité d'un coup avec apply
+apply(data[,quali],2,function(x) chisq.test(data$obesite,x))
+
+#Avec DataExplorer
+DataExplorer::plot_bar(data, by ="sexe")
+```
+
+## QUANTI VS QUANTI
+```{r}
+par(mfrow=c(1,1))
+#Matrice de corrélations
+cor(data[,quanti])
+library(ggplot2)
+library(ggcorrplot)
+# Représentation graphique de la matrice de corrélations
+ggcorrplot(cor(data[,quanti]))
+
+#-------------------------
+# Test sur le coefficient de corrélation:
+#-------------------------
+# Paire par paire
+cor.test(data$exercice,data$malbouffe)
+#Toutes les variables VS malbouffe d'un coup avec apply
+apply(data[,quanti],2,function(x) cor.test(data$malbouffe,x))
+
+
+par(mfrow=c(1,2))
+#IMC VS score
+plot(imc~malbouffe,data=data,pch = 20,col="blue")
+#IMC VS exercice
+plot(imc~exercice,data=data,pch = 20,col="blue")
+
+#Avec DataExplorer
+library(DataExplorer)
+plot_correlation(data, cor_args = list("use" = "pairwise.complete.obs"), type="c")
+plot_scatterplot(split_columns(data)$continuous, by = "malbouffe")
+```
+## QUANTI VS QUALI
+```{r}
+#Obesite VS les QUANTI
+#Variable par variable 
+#Hmisc::summarize(data$malbouffe, by=data$obesite, FUN=smean.sd, stat.name=c('Mean','SD')) #function smean.sd = moyenne et écart-type
+#Hmisc::summarize(data$malbouffe, by=data$obesite, quantile, probs=c(.5,.25,.75),stat.name=c('Q2','Q1','Q3')) #function quantiles
+
+#Toutes les variables d'un coup 
+apply(data[,quanti],2,function(x) Hmisc::summarize(x, by=data$obesite, FUN=smean.sd))
+par(mfrow=c(1,1))
+
+#Boxplot variable par variable
+boxplot(data$exercice~data$obesite, col="blue")
+```
+
+```{r}
+#-------------------------
+#t.test avec variances differentes si p-value du test variances < 10% (manque normalité, mais ici grandes bases de données)
+#-------------------------
+var.test(data$exercice~data$obesite)$p.value
+t.test(data$exercice~data$obesite, var.equal=var.test(data$exercice~data$obesite)$p.value>0.1)
+
+#revenus VS les QUANTI
+apply(data[,quanti],2,function(x) Hmisc::summarize(x, by=data$revenus, FUN=smean.sd))
+par(mfrow=c(1,1))
+boxplot(data$exercice~data$revenus, col="blue")
+```
+
+## anova (manque normalité, mais ici grandes bases de données)
+```{r}
+bartlett.test(data$exercice~data$revenus)$p.value
+summary(aov(data$exercice~data$revenus)) #aov analysis of variance mais supposant variances égales
+oneway.test(malbouffe ~ revenus, data=data) # Welch test: sans supposer que les variances sont égales
+
+#Avec DataExplorer
+DataExplorer::plot_boxplot(data, by ="sexe")
+```
+
+## Régression linéaire
+
+```{r}
+M1<-lm(malbouffe~sexe,data=data)
+summary(M1)
+confint(M1, level=0.95)
+#Résumé avec epiDisplay 
+#library(epiDisplay)
+epiDisplay::regress.display(M1)
+#Résumé avec gtsummary 
+library(gtsummary)
+tbl_regression(M1) #test t
+tbl_regression(M1) %>% add_global_p() #test F
+```
+
+
+```{r}
+M2<-lm(malbouffe~exercice,data=data)
+summary(M2)
+confint(M2, level=0.95)
+#Résumé avec epiDisplay 
+epiDisplay::regress.display(M2)
+#Résumé avec gtsummary 
+tbl_regression(M2)
+tbl_regression(M2) %>% add_global_p()
+```
+
+```{r}
+M3<-lm(malbouffe~revenus,data=data)
+summary(M3)
+confint(M3, level=0.95)
+#Résumé avec epiDisplay 
+epiDisplay::regress.display(M3)
+#Résumé avec gtsummary 
+tbl_regression(M3)
+tbl_regression(M3) %>% add_global_p()
+```
+
+```{r}
+M4<-lm(malbouffe~revenus+sexe,data=data)
+summary(M4)
+confint(M4, level=0.95)
+#comparaison des modèles 4 et 1 : apport global des revenus au modèle qui contient déjà le sexe
+anova(M1, M4)
+#Résumé avec epiDisplay 
+epiDisplay::regress.display(M4)
+#Résumé avec gtsummary 
+tbl_regression(M4)
+tbl_regression(M4) %>% add_global_p()
+```
+
+
+
 # Modèles de régression
 
 ## BACKWARD avec AIC
+
+```{r}
+load("malbouffe.RData")
+```
+
 
 ```{r}
 model_complet <- lm(formula = malbouffe ~ ., data = data)
